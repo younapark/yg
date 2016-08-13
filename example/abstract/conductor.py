@@ -1,21 +1,3 @@
-"""
-### BEGIN NODE INFO
-[info]
-name = conductor
-version = 0.0
-description =
-instancename = conductor
-
-[startup]
-cmdline = %PYTHON% %FILE%
-timeout = 20
-
-[shutdown]
-message = 987654321
-timeout = 20
-### END NODE INFO
-"""
-
 import copy
 import json
 import os
@@ -25,12 +7,11 @@ from collections import deque
 
 from influxdb import InfluxDBClient
 from labrad.server import LabradServer, setting, Signal
-from common.lib.clients.connection import connection
 from twisted.internet import reactor
 from twisted.internet.defer import inlineCallbacks, returnValue, DeferredLock
 from twisted.internet.task import LoopingCall
 from twisted.internet.threads import deferToThread
-
+from connection import connection
 class ConductorServer(LabradServer):
     parameters_updated = Signal(698124, 'signal: parameters_updated', 'b')
     def __init__(self, config_name):
@@ -58,12 +39,13 @@ class ConductorServer(LabradServer):
         if self.db_write_period:
             self.dbclient = InfluxDBClient.from_DSN(os.getenv('INFLUXDBDSN'))
             self.write_to_db()
+
     @inlineCallbacks
     def connect(self):
 
         self.cxn = connection()
         yield self.cxn.connect()
-        dc=self.cxn.get_server('lab1_digital_sequencer')
+        dc = self.cxn.get_server('lab1_digital_sequencer')
 
     def load_configuration(self):
         config = __import__(self.config_name).ConductorConfig()
@@ -140,7 +122,6 @@ class ConductorServer(LabradServer):
             returns[device_name] = {}
             for parameter_name, parameter in device.items():
                 returns[device_name][parameter_name] = parameter['enabled']
-        print self.data_directory()
         return json.dumps(returns)
 
     @setting(6, 'fix sequence keys', sequence='s', returns='s')
@@ -162,7 +143,7 @@ class ConductorServer(LabradServer):
     def read_sequence_file(self, sequence_filename):
         try:
             if not os.path.exists(sequence_filename):
-                sequence_filename = self.data_directory() + 'sequences\\' + sequence_filename
+                sequence_filename = self.data_directory() + 'sequences'+ os.path.sep + sequence_filename
             with open(sequence_filename, 'r') as infile:
                 sequence = json.load(infile)
             return sequence
@@ -171,20 +152,23 @@ class ConductorServer(LabradServer):
 
     @setting(7, 'set sequence', sequence='s', returns='s')
     def set_sequence(self, c, sequence):
-
         try:
-            sequence = json.loads(sequence)
-        except:
-            print 'no load'
-        if type(sequence).__name__ == 'list':
-            sequence = self.combine_sequences([self.read_sequence_file(s) for s in sequence])
-        else:
-            sequence = self.read_sequence_file(sequence)
+            print sequence
 
-        fixed_sequence = yield self.fix_sequence_keys(c, json.dumps(sequence))
-        self.sequence = json.loads(fixed_sequence)
+            if type(sequence).__name__ == 'list':
+                sequence = json.loads(sequence)
 
-        returnValue(fixed_sequence)
+                sequence = self.combine_sequences([self.read_sequence_file(s) for s in sequence])
+            else:
+                sequence = self.read_sequence_file(sequence)
+            print sequence
+            fixed_sequence = yield self.fix_sequence_keys(c, json.dumps(sequence))
+            self.sequence = json.loads(fixed_sequence)
+            returnValue(fixed_sequence)
+        except Exception, e:
+            print 'unable to load sequence'
+            print e
+#            returnValue(sequence)
 
     @setting(8, 'queue experiment', experiment='s', returns='i')
     def queue_experiment(self, c, experiment):
@@ -257,15 +241,13 @@ class ConductorServer(LabradServer):
 
     @setting(11, 'evaluate sequence parameters', sequence='s', returns='s')
     def evaluate_sequence_parameters(self, c, sequence=None):
-
         if sequence is None:
             evaluated_sequence = self.do_evaluate_sequence_parameters(self.sequence)
-
         else:
             sequence = json.loads(sequence)
             evaluated_sequence = self.do_evaluate_sequence_parameters(sequence)
-            # evaluated_sequence = json.dumps(evaluated_sequence)
-        return json.dumps(evaluated_sequence) ##editted to always output str type
+            evaluated_sequence = json.dumps(evaluated_sequence)
+        return evaluated_sequence
 
     @inlineCallbacks
     def program_sequencers(self):
@@ -367,12 +349,9 @@ class ConductorServer(LabradServer):
                 data_directory = self.data_directory()
                 if not os.path.exists(data_directory):
                     os.mkdir(data_directory )
-
                 data_name = advanced['name']
                 data_path = lambda i: data_directory + data_name + '#{}'.format(i)
-
                 iteration = 0
-
                 while os.path.isfile(data_path(iteration)):
                     iteration += 1
                 if advanced['append_data']:
@@ -406,7 +385,6 @@ class ConductorServer(LabradServer):
     def run_sequence(self):
         try:
             sequence = self.evaluate_sequence_parameters(None)
-
             duration = sum(sequence['digital@T'])
             if self.do_save:
                 self.update_data('parameters')
@@ -466,7 +444,8 @@ class ConductorServer(LabradServer):
             sequence = json.dumps(sequence)
 
         sequence = self.evaluate_sequence_parameters(sequence)
-        sequence = json.loads(sequence)
+        if type(sequence) == str:
+            sequence = json.loads(sequence)
 
         dserver = yield self.cxn.get_server('lab1_digital_sequencer')
         pserver = yield self.cxn.get_server('pulser')
@@ -505,61 +484,6 @@ class ConductorServer(LabradServer):
         else:
             yield pserver.start_number(startnumber)
 
-
-    @inlineCallbacks
-    @setting(15, 'run pulser seq', sequence='s', startnumber='i', returns='')
-    def runPulserSeq(self, c, sequence, startnumber=0):  # accept string type
-        '''
-        s= either name of the file or name including the path starting from C:\
-        startnumber = 0 means infinite, 1 means running once, 2 runnning twice, ...
-
-        run_pulser_seq('data') runs a file named 'data' if saved on the same date as the running date. Sequence will run infinitely.
-
-        run_pulser_seq('data',2) runs the 'data' sequence twice.
-
-        run_pulser_seq('C:\LabRAD\yesrgang\example\data\20160809\sequences\data',1) runs the sequence 'data' saved on different date.'''
-
-        # startnumber=1
-        sequence = yield self.set_sequence(c, sequence)  # sequence can be string or name of file; outputs dict
-        if type(sequence) == dict:
-            sequence = json.dumps(sequence)
-
-        sequence = self.evaluate_sequence_parameters(sequence)
-        sequence = json.loads(sequence)
-
-        dserver = yield self.cxn.get_server('lab1_digital_sequencer')
-        pserver = yield self.cxn.get_server('pulser')
-        tc = yield dserver.get_timing_channel()
-        dc = yield dserver.get_channels()
-
-        self.timing_channel = json.loads(tc)
-        channelKeys = json.loads(dc)
-        durations = sequence[self.timing_channel]
-        durationSize = len(durations)
-
-        from labrad.units import WithUnit as U
-
-        yield pserver.stop_sequence()
-        yield pserver.new_sequence()
-
-        start = 0.0
-        oldDuration = 0.0
-        duration = 0.0
-
-        for i in range(0, durationSize):
-            for channelKey in channelKeys:
-                if sequence[channelKey][i] != 0:
-                    channelName = self.get_name(channelKey)
-                    duration = durations[i]  # duration in seconds
-                    print 'channelName, start, duration:', channelName, start, duration
-                    yield pserver.add_ttl_pulse(channelName, U(float(start), 's'), U(float(duration), 's'))
-            start = start + durations[i]
-
-        yield pserver.program_sequence()
-        if startnumber == 0:
-            yield pserver.start_infinite()
-        else:
-            yield pserver.start_number(startnumber)
 
 
 if __name__ == "__main__":
