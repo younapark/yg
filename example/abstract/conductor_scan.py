@@ -12,6 +12,49 @@ from twisted.internet.defer import inlineCallbacks, returnValue, DeferredLock
 from twisted.internet.task import LoopingCall
 from twisted.internet.threads import deferToThread
 
+
+class Scan(object):
+    def __init__(self, **kwargs):
+        for kw in kwargs:
+            setattr(self, kw, kwargs[kw])
+
+    def queue(self, clear_all=False):
+
+        experiment = {}
+        for attr in ['name', 'parameters', 'display']:
+            if hasattr(self, attr):
+                experiment[attr] = getattr(self, attr)
+        for attr in ['sequence']:
+            if hasattr(self, attr):
+                # experiment[attr] = json.dumps(getattr(self, attr))
+                experiment[attr] = getattr(self, attr)
+        if clear_all:
+            self.set_experiment_queue()
+            self.stop_experiment()
+        self.queue_experiment(json.dumps(experiment))
+
+
+class Loop(object):
+    def __init__(self, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+    def queue(self, clear_all=False):
+        experiment = {}
+        for attr in ['name', 'parameters', 'display']:
+            if hasattr(self, attr):
+                experiment[attr] = getattr(self, attr)
+        for attr in ['sequence']:
+            if hasattr(self, attr):
+                experiment[attr] = json.dumps(getattr(self, attr))
+        experiment['loop'] = 1
+        experiment['append_data'] = 0
+        if clear_all:
+            self.set_experiment_queue()
+            self.stop_experiment()
+        self.queue_experiment(json.dumps(experiment))
+
+
 class ConductorServer(LabradServer):
     parameters_updated = Signal(698124, 'signal: parameters_updated', 'b')
     def __init__(self, config_name):
@@ -27,6 +70,8 @@ class ConductorServer(LabradServer):
         self.in_communication = DeferredLock()
         self.cxn = self.connect()
         self.newSequence = False
+        self.scan = Scan()
+        self.loop = Loop()
         LabradServer.__init__(self)
 
     @inlineCallbacks
@@ -34,7 +79,7 @@ class ConductorServer(LabradServer):
         yield LabradServer.initServer(self)
         yield self.set_sequence(None, json.dumps(self.default_sequence))
         yield self.register_device(None, json.dumps(self.default_devices) )
-        yield self.run_sequence()
+        # yield self.run_sequence()
         if self.db_write_period:
             self.dbclient = InfluxDBClient.from_DSN(os.getenv('INFLUXDBDSN'))
             self.write_to_db()
@@ -157,6 +202,7 @@ class ConductorServer(LabradServer):
                 sequence = self.combine_sequences([self.read_sequence_file(s) for s in sequence])
             else:
                 sequence = self.read_sequence_file(sequence)
+            print sequence
             fixed_sequence = yield self.fix_sequence_keys(c, json.dumps(sequence))
             self.sequence = json.loads(fixed_sequence)
             self.newSequence = True
@@ -285,7 +331,6 @@ class ConductorServer(LabradServer):
         print 'write_data is run'
         print 'writing: ', self.data.keys()
         self.written = True
-        print self.data_path
         with open(self.data_path, 'w') as outfile:
             json.dump(self.data, outfile)
         print 'end of write_data'
@@ -314,13 +359,10 @@ class ConductorServer(LabradServer):
     def do_advance(self, x):
         """ get next values from current experiment """
         if type(x).__name__ == 'list':
-            print 'do_advance list is run:', x
             return x.pop(0)
         elif type(x).__name__ == 'dict':
-            print 'do_advance dict is run:', x
             return {k: self.do_advance(v) for k, v in x.items()}
         else:
-            print 'do_advance else is run:', x
             return x
 
     @inlineCallbacks
@@ -328,19 +370,13 @@ class ConductorServer(LabradServer):
         do_save = 1
         try:
             print 'advance_try is run'
-            print 'advance 0'
             if not self.experiment:
                 raise IndexError
             advanced = self.do_advance(self.experiment)
-            print 'advance 1'
 
-        except IndexError, e:
-            print 'advance_except is run', e
-            print 'advance 2'
-
+        except IndexError:
+            print 'advance_except is run'
             if len(self.experiment_queue):
-                print 'advance 3'
-
                 # get next experiment from queue
                 self.experiment = self.experiment_queue.popleft()
                 experiment_copy = copy.deepcopy(self.experiment)
@@ -359,7 +395,6 @@ class ConductorServer(LabradServer):
                     self.experiment_queue.appendleft(experiment_copy)
 
                 advanced = self.do_advance(self.experiment)
-                print 'advance 4'
 
                 # determine where to save data
                 data_directory = self.data_directory()
@@ -385,8 +420,6 @@ class ConductorServer(LabradServer):
                 if not (advanced['loop'] and advanced['append_data']):
                     print 'saving data to {}'.format(self.data_path)
             else:
-                print 'advance 5'
-
                 print 'experiment queue is empty'
                 advanced = {}
                 do_save = 0
@@ -396,39 +429,33 @@ class ConductorServer(LabradServer):
             p = yield self.update_parameters(None, json.dumps(parameters))
         if advanced.has_key('sequence'):
             sequence = self.set_sequence(None, json.dumps(advanced['sequence']))
-            self.newSequence = True
+
         if advanced.has_key('display'):
             self.display = advanced['display']
 
     @inlineCallbacks
     def run_sequence(self):
         try:
-            yield self.advance()
-
             print 'run_sequence is run'
-            print 'experiment_queue', self.experiment_queue
             sequence = self.evaluate_sequence_parameters(None)
-            print sequence
             duration = sum(sequence['digital@T'])
-
             print('1')
-            # if self.do_save:
-            #     self.update_data('parameters')
-            #     self.update_data_call = reactor.callLater(duration - 2, self.update_data, 'received_data')
-            #     self.write_data_call = reactor.callLater(duration - 1., self.write_data)
+            if self.do_save:
+                self.update_data('parameters')
+                self.update_data_call = reactor.callLater(duration - 2, self.update_data, 'received_data')
+                self.write_data_call = reactor.callLater(duration - 1., self.write_data)
             print('2')
-            # yield self.advance()
+            yield self.advance()
             print('3')
-            print self.newSequence
             if self.newSequence:
                 sequence = yield self.program_sequencers()
                 self.newSequence = False
 
             yield self.parameters_updated(True)
             duration = sum(sequence['digital@T'])
-            self.run_sequence_call = reactor.callLater(duration, self.run_sequence)
+            self.run_sequence_call = reactor.callLater(10, self.run_sequence)
             yield self.evaluate_device_parameters()
-            print 'duration: ', duration
+            print('4')
         except Exception, e:
             print e
             self.sequence,
@@ -455,7 +482,6 @@ class ConductorServer(LabradServer):
             self.dbclient.write_points(to_db)
         except:
             print "failed to save parameters to database"
-
 
 
 if __name__ == "__main__":

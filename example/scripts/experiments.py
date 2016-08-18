@@ -22,10 +22,16 @@ class Scan(object):
             if hasattr(self, attr):
                 # experiment[attr] = json.dumps(getattr(self, attr))
                 experiment[attr] = getattr(self, attr)
+        experiment['loop'] = 0
+        experiment['append_data'] = 0
+
         if clear_all:
             c.set_experiment_queue()
             c.stop_experiment()
+        print experiment
         c.queue_experiment(json.dumps(experiment))
+
+        # c.run_experiment(json.dumps(experiment))
 
 class Loop(object):
     def __init__(self, **kwargs):

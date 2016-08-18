@@ -1,13 +1,13 @@
 from experiments import *
 
 name = 'scan_rabi_flop'
-sequence_name = 'ygTrabi'
+sequence_name = 'ygTrabi2'
 
 clock_intensity = -5
 
-t_start = 0.0
-t_stop = 4
-n_points = 2
+t_start = 0
+t_stop = 1
+n_points = 10
 
 """ should not regularly need to change stuff below here """
 times = np.linspace(t_start, t_stop, n_points).tolist()[1:]
