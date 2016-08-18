@@ -11,7 +11,7 @@ from twisted.internet import reactor
 from twisted.internet.defer import inlineCallbacks, returnValue, DeferredLock
 from twisted.internet.task import LoopingCall
 from twisted.internet.threads import deferToThread
-from connection import connection
+
 class ConductorServer(LabradServer):
     parameters_updated = Signal(698124, 'signal: parameters_updated', 'b')
     def __init__(self, config_name):
@@ -22,13 +22,11 @@ class ConductorServer(LabradServer):
         self.experiment = {}
         self.parameters = {'sequence': {}}
         self.received_data = {}
-
         self.config_name = config_name
         self.load_configuration()
         self.in_communication = DeferredLock()
+        self.cxn = self.connect()
         LabradServer.__init__(self)
-
-        self.connect()
 
     @inlineCallbacks
     def initServer(self):
@@ -39,13 +37,10 @@ class ConductorServer(LabradServer):
         if self.db_write_period:
             self.dbclient = InfluxDBClient.from_DSN(os.getenv('INFLUXDBDSN'))
             self.write_to_db()
-
     @inlineCallbacks
     def connect(self):
-
-        self.cxn = connection()
-        yield self.cxn.connect()
-        dc = self.cxn.get_server('lab1_digital_sequencer')
+        from labrad.wrappers import connectAsync
+        self.cxn = yield connectAsync('localhost')
 
     def load_configuration(self):
         config = __import__(self.config_name).ConductorConfig()
@@ -153,11 +148,11 @@ class ConductorServer(LabradServer):
     @setting(7, 'set sequence', sequence='s', returns='s')
     def set_sequence(self, c, sequence):
         try:
-            print sequence
-
-            if type(sequence).__name__ == 'list':
+            try:
                 sequence = json.loads(sequence)
-
+            except:
+                pass
+            if type(sequence).__name__ == 'list':
                 sequence = self.combine_sequences([self.read_sequence_file(s) for s in sequence])
             else:
                 sequence = self.read_sequence_file(sequence)
@@ -166,9 +161,9 @@ class ConductorServer(LabradServer):
             self.sequence = json.loads(fixed_sequence)
             returnValue(fixed_sequence)
         except Exception, e:
-            print 'unable to load sequence'
-            print e
-#            returnValue(sequence)
+            print 'unable to load sequence;', 'error is:', e, 'current sequence is', sequence
+
+            returnValue(sequence)
 
     @setting(8, 'queue experiment', experiment='s', returns='i')
     def queue_experiment(self, c, experiment):
@@ -195,11 +190,12 @@ class ConductorServer(LabradServer):
         else:
             self.experiment_queue = deque([])
         return len(self.experiment_queue)
-
+    @inlineCallbacks
     @setting(10, 'stop experiment')
     def stop_experiment(self, c):
         self.do_save = 0
         self.experiment = {}
+        yield self.cxn.pulser.stop_sequence()
 
     @inlineCallbacks
     def evaluate_device_parameters(self):
@@ -377,7 +373,8 @@ class ConductorServer(LabradServer):
             parameters = advanced['parameters']
             p = yield self.update_parameters(None, json.dumps(parameters))
         if advanced.has_key('sequence'):
-            self.set_sequence(None, advanced['sequence'])
+            sequence = self.set_sequence(None, json.dumps(advanced['sequence']))
+
         if advanced.has_key('display'):
             self.display = advanced['display']
 
@@ -388,16 +385,18 @@ class ConductorServer(LabradServer):
             duration = sum(sequence['digital@T'])
             if self.do_save:
                 self.update_data('parameters')
-                self.update_data_call = reactor.callLater(duration-2, self.update_data, 'received_data')
-                self.write_data_call = reactor.callLater(duration-1., self.write_data)
+                self.update_data_call = reactor.callLater(duration - 2, self.update_data, 'received_data')
+                self.write_data_call = reactor.callLater(duration - 1., self.write_data)
             yield self.advance()
             sequence = yield self.program_sequencers()
             yield self.parameters_updated(True)
             duration = sum(sequence['digital@T'])
-            self.run_sequence_call = reactor.callLater(duration, self.run_sequence)
+            self.run_sequence_call = reactor.callLater(10, self.run_sequence)
             yield self.evaluate_device_parameters()
+
         except Exception, e:
             print e
+            self.sequence,
             print "error running sequence. will try again in 10 seconds"
             self.run_sequence_call = reactor.callLater(10, self.run_sequence)
 
@@ -421,70 +420,6 @@ class ConductorServer(LabradServer):
             self.dbclient.write_points(to_db)
         except:
             print "failed to save parameters to database"
-
-    def get_name(self, channel_key):
-        return channel_key.rsplit('@', 1)[0]
-
-    @inlineCallbacks
-    @setting(15, 'run pulser seq', sequence = 's', startnumber='i', returns='')
-    def runPulserSeq(self, c,sequence,startnumber=0): #accept string type
-        '''
-        s= either name of the file or name including the path starting from C:\
-        startnumber = 0 means infinite, 1 means running once, 2 runnning twice, ...
-
-        run_pulser_seq('data') runs a file named 'data' if saved on the same date as the running date. Sequence will run infinitely.
-
-        run_pulser_seq('data',2) runs the 'data' sequence twice.
-
-        run_pulser_seq('C:\LabRAD\yesrgang\example\data\20160809\sequences\data',1) runs the sequence 'data' saved on different date.'''
-
-        # startnumber=1
-        sequence = yield self.set_sequence(c,sequence)  # sequence can be string or name of file; outputs dict
-        if type(sequence) == dict:
-            sequence = json.dumps(sequence)
-
-        sequence = self.evaluate_sequence_parameters(sequence)
-        if type(sequence) == str:
-            sequence = json.loads(sequence)
-
-        dserver = yield self.cxn.get_server('lab1_digital_sequencer')
-        pserver = yield self.cxn.get_server('pulser')
-        tc = yield dserver.get_timing_channel()
-        dc = yield dserver.get_channels()
-
-
-
-
-        self.timing_channel = json.loads(tc)
-        channelKeys= json.loads(dc)
-        durations = sequence[self.timing_channel]
-        durationSize = len(durations)
-
-        from labrad.units import WithUnit as U
-
-        yield pserver.stop_sequence()
-        yield pserver.new_sequence()
-
-        start = 0.0
-        oldDuration = 0.0
-        duration = 0.0
-
-        for i in range(0, durationSize):
-            for channelKey in channelKeys:
-                if sequence[channelKey][i] != 0:
-                    channelName = self.get_name(channelKey)
-                    duration = durations[i]  # duration in seconds
-                    print 'channelName, start, duration:', channelName, start, duration
-                    yield pserver.add_ttl_pulse(channelName, U(float(start), 's'), U(float(duration), 's'))
-            start = start + durations[i]
-
-        yield pserver.program_sequence()
-        if startnumber == 0 :
-            yield pserver.start_infinite()
-        else:
-            yield pserver.start_number(startnumber)
-
-
 
 if __name__ == "__main__":
     from labrad import util

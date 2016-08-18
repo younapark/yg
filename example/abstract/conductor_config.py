@@ -14,7 +14,7 @@ class ConductorConfig(object):
                 "device" = \'sequence\' AND "parameter" = \'{}\' ORDER BY time \
                 DESC LIMIT 1'
         self.sequencers = [
-                '{}_analog_sequencer'.format(node), 
+                # '{}_analog_sequencer'.format(node),
                 '{}_digital_sequencer'.format(node),
         ]
         self.default_sequence = {'digital@T': [1, 5, 1]}

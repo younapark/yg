@@ -1,20 +1,3 @@
-'''
-### BEGIN NODE INFO
-[info]
-name = digital_sequencer
-version = 0.0
-description =
-instancename = digital_sequencer
-
-[startup]
-cmdline = %PYTHON% %FILE%
-timeout = 20
-
-[shutdown]
-message = 987654321
-timeout = 20
-### END NODE INFO
-'''
 import json
 import numpy as np
 
@@ -28,7 +11,12 @@ class DigitalSequencerServer(LabradServer):
         self.config_name = config_name
         self.load_configuration()
         self.update = Signal(self.update_id, 'signal: update', 's')
-
+        self.cxn = self.connect()
+        self.pulserTrigger = False
+    @inlineCallbacks
+    def connect(self):
+        from labrad.wrappers import connectAsync
+        self.cxn = yield connectAsync('localhost')
     def load_configuration(self):
         config = __import__(self.config_name).DigitalSequencerConfig()
         for key, value in config.__dict__.items():
@@ -36,7 +24,7 @@ class DigitalSequencerServer(LabradServer):
 
     def initServer(self):
         pass
-   
+
     def program_sequence(self, sequence):
         pass
 
@@ -72,15 +60,18 @@ class DigitalSequencerServer(LabradServer):
     def get_channels(self, c):
         channels = np.concatenate([[c.key for c in b.channels] for n, b in sorted(self.boards.items())]).tolist()
         return json.dumps(channels)
-    
+
     @setting(11, 'get timing channel')
     def get_timing_channel(self, c):
         return json.dumps(self.timing_channel.name)
 
+    @inlineCallbacks
     @setting(2, 'run sequence', sequence='s')
     def run_sequence(self, c, sequence):
+        yield self.runPulserSeq(c,sequence,1)
         sequence = json.loads(sequence)
-        self.program_sequence(sequence)
+        yield self.program_sequence(sequence)
+
 
     @setting(3, 'sequencer mode', mode='s')
     def sequencer_mode(self, c, mode=None):
@@ -99,11 +90,11 @@ class DigitalSequencerServer(LabradServer):
             self.write_channel_modes(board)
         self.notify_listeners(c)
         return channel.mode
-    
-    def write_channel_modes(self, board): 
+
+    def write_channel_modes(self, board):
         pass
 
-    
+
     @setting(5, 'channel manual state', channel_id='s', state='i')
     def channel_manual_state(self, c, channel_id, state=None):
         channel = self.id2channel(channel_id)
@@ -141,7 +132,7 @@ class DigitalSequencerServer(LabradServer):
         sequence = json.loads(sequence)
         sequence_keyfix =  self._fix_sequence_keys(sequence)
         return json.dumps(sequence)
-    
+
     def _fix_sequence_keys(self, sequence):
         # take sequence name@loc to configuration name@loc
         locs = [key.split('@')[1] for key in sequence.keys()]
@@ -156,13 +147,56 @@ class DigitalSequencerServer(LabradServer):
                     elif c.loc not in locs:
                         sequence.update({c.key: [c.manual_state for dt in sequence['digital@T']]})
         return sequence
-    
+
     @setting(10, 'reload configuration')
     def reload_configuration(self, c):
         self.load_configuration()
+    def get_name(self, channel_key):
+        return channel_key.rsplit('@', 1)[0]
+
+    @inlineCallbacks
+    def runPulserSeq(self, c, sequence, startnumber=1):  # accept string type
+        pserver = yield self.cxn.pulser
+
+        pserver = yield self.cxn.pulser
+        # startnumber=1
+
+        if type(sequence) == dict:
+            sequence = json.dumps(sequence)
 
 
+        if type(sequence) == dict:
+            sequence = json.dumps(sequence)
+        sequence = json.loads(sequence)
 
+        tc = self.get_timing_channel(c)
+        dc = self.get_channels(c)
+
+        timing_channel = json.loads(tc)
+        channelKeys = json.loads(dc)
+        durations = sequence[timing_channel]
+        durationSize = len(durations)
+
+        from labrad.units import WithUnit as U
+        yield pserver.stop_sequence()
+        yield pserver.new_sequence()
+        start = 0.0
+        oldDuration = 0.0
+        duration = 0.0
+        for i in range(0, durationSize):
+            for channelKey in channelKeys:
+                if sequence[channelKey][i] != 0:
+                    channelName = self.get_name(channelKey)
+                    duration = durations[i]  # duration in seconds
+                    print 'channelName, start, duration:', channelName, start, duration
+                    yield pserver.add_ttl_pulse(channelName, U(float(start), 's'), U(float(duration), 's'))
+            start = start + durations[i]
+        yield pserver.program_sequence()
+        if startnumber == 0:
+            yield pserver.start_infinite()
+        else:
+            yield pserver.start_number(startnumber)
+        print 'pulser'
 
 if __name__ == "__main__":
     config_name = 'digital_sequencer_config'

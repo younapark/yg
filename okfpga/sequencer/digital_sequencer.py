@@ -3,7 +3,7 @@
 [info]
 name = digital_sequencer
 version = 1.0
-description = 
+description =
 instancename = %LABRADNODE%_digital_sequencer
 
 [startup]
@@ -43,7 +43,7 @@ class DigitalSequencerServer(LabradServer):
             if not success:
                 self.boards.pop(board)
         self.initialize_outputs()
-    
+
     def initialize_board(self, board):
         fp = ok.FrontPanel()
         module_count = fp.GetDeviceCount()
@@ -56,14 +56,14 @@ class DigitalSequencerServer(LabradServer):
             if iden == board.device_id:
                 board.xem = tmp
                 print 'connected to {}'.format(iden)
-                board.xem.LoadDefaultPLLConfiguration() 
+                board.xem.LoadDefaultPLLConfiguration()
                 prog = board.xem.ConfigureFPGA(board.bit_file)
                 if prog:
                    print "unable to program sequencer"
                    return False
                 return True
         return False
-    
+
     def initialize_outputs(self):
         for b in self.boards.values():
 	    self.write_channel_modes(b)
@@ -89,14 +89,14 @@ class DigitalSequencerServer(LabradServer):
 
         # for now, assume each channel_sequence has same timings
         programmable_sequence = [(dt, [sequence[c.key][i] for c in board.channels]) for i, dt in enumerate(sequence[self.timing_channel.name])]
-        
+
         ba = []
         for t, l in programmable_sequence:
             ba += list([sum([2**j for j, b in enumerate(l[i:i+8]) if b]) for i in range(0, 64, 8)])
             ba += list([int(eval(hex(self.time_to_ticks(board, t))) >> i & 0xff) for i in range(0, 32, 8)])
         ba += [0]*96
         return ba, sequence
-    
+
     def program_sequence(self, sequence):
         updated_sequence = {}
         for board in self.boards.values():
@@ -142,7 +142,7 @@ class DigitalSequencerServer(LabradServer):
     def get_channels(self, c):
         channels = np.concatenate([[c.key for c in b.channels] for n, b in sorted(self.boards.items())]).tolist()
         return json.dumps(channels)
-    
+
     @setting(11, 'get timing channel')
     def get_timing_channel(self, c):
         return json.dumps(self.timing_channel.name)
@@ -172,15 +172,15 @@ class DigitalSequencerServer(LabradServer):
             self.write_channel_stateinvs(board)
         self.notify_listeners(c)
         return channel.mode
-    
-    def write_channel_modes(self, board): 
+
+    def write_channel_modes(self, board):
         cm_list = [c.mode for c in board.channels]
         bas = [sum([2**j for j, m in enumerate(cm_list[i:i+16]) if m == 'manual']) for i in range(0, 64, 16)]
         for ba, wire in zip(bas, board.channel_mode_wires):
             board.xem.SetWireInValue(wire, ba)
         board.xem.UpdateWireIns()
-    
-    def write_channel_stateinvs(self, board): 
+
+    def write_channel_stateinvs(self, board):
         cm_list = [c.mode for c in board.channels]
         cs_list = [c.manual_state for c in board.channels]
         ci_list = [c.invert for c in board.channels]
@@ -226,7 +226,7 @@ class DigitalSequencerServer(LabradServer):
         sequence = json.loads(sequence)
         sequence_keyfix =  self._fix_sequence_keys(sequence)
         return json.dumps(sequence)
-    
+
     def _fix_sequence_keys(self, sequence):
         # take sequence name@loc to configuration name@loc
         locs = [key.split('@')[1] for key in sequence.keys()]
@@ -241,7 +241,7 @@ class DigitalSequencerServer(LabradServer):
                     elif c.loc not in locs:
                         sequence.update({c.key: [c.manual_state for dt in sequence['digital@T']]})
         return sequence
-    
+
     @setting(10, 'reload configuration')
     def reload_configuration(self, c):
         self.load_configuration()

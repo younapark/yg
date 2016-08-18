@@ -435,15 +435,15 @@ class Sequencer(QtGui.QWidget):
             sequence = self.getSequence()
             json.dump(sequence, outfile)
 
-    # @inlineCallbacks
+    @inlineCallbacks
     def runSequence(self, c):
         self.saveSequence()
-        # sequence = json.dumps(self.getSequence())
-        # conductor = yield self.cxn.get_server(self.conductor_servername)
-        # yield conductor.set_sequence(sequence)
+        sequence = json.dumps(self.getSequence())
+        conductor = yield self.cxn.get_server(self.conductor_servername)
+        yield conductor.set_sequence(sequence)
         # sequence = json.loads(sequence)
 
-        self.runPulserSeq(c, self.getSequence())
+        # self.runPulserSeq(c, self.getSequence())
 
     @inlineCallbacks
     def loadSequence(self, filepath):
@@ -546,6 +546,8 @@ class Sequencer(QtGui.QWidget):
             if c.key() == QtCore.Qt.Key_B:
                 self.browse()
 
+    def get_name(self, channel_key):
+        return channel_key.rsplit('@', 1)[0]
     @inlineCallbacks
     def runPulserSeq(self,c, sequence):
         s = json.dumps(sequence)

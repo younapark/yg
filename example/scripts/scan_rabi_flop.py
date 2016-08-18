@@ -1,4 +1,6 @@
 from experiments import *
+import labrad
+import json
 
 name = 'scan_rabi_flop'
 
@@ -11,14 +13,17 @@ t_start = 0.0
 t_stop = 0.8
 n_point = 20
 
+
 """ should not regularly need to change stuff below here """
-times = np.linspace(t_start, t_stop, n_point).tolist()
+times = np.linspace(t_start,  t_stop, n_point).tolist()
 parameters = {
     'sequence': {
         '*Trabi': times,
         '*Iclk': clock_intensity,
-    },
+        # '*sequence': seq
+    }
 }
+
 
 scan = Scan(
     name=name,

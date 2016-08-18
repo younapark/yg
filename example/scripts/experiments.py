@@ -20,7 +20,8 @@ class Scan(object):
                 experiment[attr] = getattr(self, attr)
         for attr in ['sequence']:
             if hasattr(self, attr):
-                experiment[attr] = json.dumps(getattr(self, attr))
+                # experiment[attr] = json.dumps(getattr(self, attr))
+                experiment[attr] = getattr(self, attr)
         if clear_all:
             c.set_experiment_queue()
             c.stop_experiment()
